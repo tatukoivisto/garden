@@ -2,113 +2,165 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Smooth scrolling ────────────────────────────────────────────── */
-html {
-  scroll-behavior: smooth;
-}
+html { scroll-behavior: smooth; }
 
-/* ── Custom scrollbar (dark, garden-themed) ──────────────────────── */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent; }
 
-::-webkit-scrollbar-track {
-  background: #2F5E3A;
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #6BAF7A;
-  border-radius: 4px;
-  border: 2px solid #2F5E3A;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #A8C66C;
-}
-
-/* Firefox */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: #6BAF7A #2F5E3A;
-}
-
-/* ── CSS custom properties (garden palette) ──────────────────────── */
-:root {
-  --color-soil:        #5C3D2E;
-  --color-soil-light:  #7A5240;
-  --color-leaf:        #4A7C59;
-  --color-leaf-light:  #6BAF7A;
-  --color-leaf-dark:   #2F5E3A;
-  --color-sprout:      #A8C66C;
-  --color-sun:         #F4B942;
-  --color-bark:        #8B5E3C;
-  --color-stone:       #9E9E8E;
-  --color-cream:       #F5F0E8;
-  --color-cream-dark:  #EDE4D0;
-  --color-sky:         #87CEEB;
-
-  --foreground: var(--color-soil);
-  --background: var(--color-cream);
-}
-
-/* ── Base element styles ─────────────────────────────────────────── */
 @layer base {
   body {
-    @apply bg-garden-cream text-garden-soil antialiased;
+    @apply bg-[#0a0f0a] text-white antialiased;
     font-feature-settings: "rlig" 1, "calt" 1;
   }
-
-  h1, h2, h3, h4, h5, h6 {
-    @apply font-semibold tracking-tight;
-  }
-
-  a {
-    @apply text-garden-leaf transition-colors duration-200;
-  }
-
-  a:hover {
-    @apply text-garden-leaf-dark;
-  }
-
-  ::selection {
-    background-color: #A8C66C;
-    color: #2F5E3A;
-  }
+  ::selection { background-color: #34d399; color: #064e3b; }
 }
 
-/* ── Utility / component layer ───────────────────────────────────── */
 @layer components {
   .btn-primary {
     @apply inline-flex items-center justify-center gap-2
-           rounded-lg bg-garden-leaf px-4 py-2 text-sm font-medium text-white
-           shadow-sm transition-all duration-200
-           hover:bg-garden-leaf-dark hover:shadow-md
-           focus-visible:outline-none focus-visible:ring-2
-           focus-visible:ring-garden-leaf focus-visible:ring-offset-2
+           rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-white
+           shadow-sm shadow-emerald-500/20 transition-all duration-200
+           hover:bg-emerald-400 hover:shadow-md
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500
            disabled:pointer-events-none disabled:opacity-50;
-  }
-
-  .btn-secondary {
-    @apply inline-flex items-center justify-center gap-2
-           rounded-lg border border-garden-leaf bg-transparent px-4 py-2
-           text-sm font-medium text-garden-leaf shadow-sm
-           transition-all duration-200
-           hover:bg-garden-leaf hover:text-white
-           focus-visible:outline-none focus-visible:ring-2
-           focus-visible:ring-garden-leaf focus-visible:ring-offset-2
-           disabled:pointer-events-none disabled:opacity-50;
-  }
-
-  .card {
-    @apply rounded-xl border border-garden-cream-dark bg-white/70
-           shadow-sm backdrop-blur-sm
-           transition-shadow duration-200
-           hover:shadow-md;
-  }
-
-  .garden-panel {
-    @apply rounded-2xl bg-garden-leaf-dark/90 p-6 text-white shadow-lg;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Zone animations
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Zone entrance */
+@keyframes zoneAppear {
+  0% { opacity: 0; transform: scale(0.85); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.zone-enter { animation: zoneAppear 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+
+/* Canvas slide-in */
+@keyframes canvasSlideIn {
+  0% { max-width: 0; opacity: 0; }
+  100% { max-width: 100%; opacity: 1; }
+}
+.canvas-slide-in { animation: canvasSlideIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+
+/* Ghost zone pulse (pending actions) */
+@keyframes ghostPulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+.ghost-zone-pulse { animation: ghostPulse 2s ease-in-out infinite; }
+
+/* AI highlight pulse on zones */
+@keyframes highlightPulse {
+  0%, 100% { stroke-opacity: 0.3; stroke-width: 2; }
+  50% { stroke-opacity: 0.8; stroke-width: 3; }
+}
+.zone-highlight-pulse { animation: highlightPulse 1.5s ease-in-out infinite; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Streaming cursor
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes cursorBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.streaming-cursor::after {
+  content: '▍';
+  animation: cursorBlink 0.8s ease-in-out infinite;
+  color: #34d399;
+}
+
+/* AI thinking dots */
+@keyframes thinkingBounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+.thinking-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #34d399;
+  animation: thinkingBounce 1.2s ease-in-out infinite;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Onboarding wizard
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes wizardFadeIn {
+  0% { opacity: 0; transform: translateY(12px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.wizard-fade-in { animation: wizardFadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+
+@keyframes wizardStepEnter {
+  0% { opacity: 0; transform: translateX(20px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+.wizard-step-enter { animation: wizardStepEnter 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   AI Command Bar
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes commandBarResponseEnter {
+  0% { opacity: 0; transform: translateY(8px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+.command-bar-response-enter { animation: commandBarResponseEnter 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+
+@keyframes suggestionsEnter {
+  0% { opacity: 0; transform: translateY(4px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.command-bar-suggestions-enter { animation: suggestionsEnter 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Chat Drawer
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes drawerSlideUp {
+  0% { transform: translateY(100%); }
+  100% { transform: translateY(0); }
+}
+.drawer-slide-up { animation: drawerSlideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+
+@keyframes backdropFadeIn {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+.drawer-backdrop-enter { animation: backdropFadeIn 0.25s ease-out forwards; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Zone Inspector
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes inspectorSlideIn {
+  0% { transform: translateX(100%); opacity: 0; }
+  100% { transform: translateX(0); opacity: 1; }
+}
+.inspector-slide-in { animation: inspectorSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Approval Banner
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes approvalBannerEnter {
+  0% { opacity: 0; transform: translate(-50%, 12px) scale(0.96); }
+  100% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+.approval-banner-enter { animation: approvalBannerEnter 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Utility
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
+.scrollbar-none::-webkit-scrollbar { display: none; }

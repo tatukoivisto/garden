@@ -322,3 +322,40 @@ export interface GardenTemplate {
   garden: Partial<Garden>;
   tags: string[];
 }
+
+// AI action (from AI response)
+export interface AIAction {
+  type: 'add_zone' | 'move_zone' | 'remove_zone' | 'resize_zone' | 'rename_zone' | 'rotate_zone' | 'assign_crops' | 'update_climate' | string;
+  description: string;
+  payload: Record<string, unknown>;
+}
+
+// Pending action (staged for approval)
+export interface PendingAction {
+  id: string;
+  action: AIAction;
+  status: 'pending' | 'approved' | 'rejected';
+}
+
+// AI structured response
+export interface AIStructuredResponse {
+  message: string;
+  actions: AIAction[];
+  suggestions: AISuggestion[];
+}
+
+// AI-returned suggestion
+export interface AISuggestion {
+  label: string;
+  prompt: string;
+}
+
+// Smart suggestion (computed from garden state)
+export interface Suggestion {
+  id: string;
+  label: string;
+  prompt: string;
+  icon: string;
+  priority: number;
+  category: 'layout' | 'crops' | 'maintenance' | 'analysis';
+}

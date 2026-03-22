@@ -214,6 +214,18 @@ export const zoneTemplates: ZoneTemplate[] = [
     defaultShape: 'rect',
     description: 'Boundary fence, wall or hedge line',
   },
+
+  // ── CUSTOM ──────────────────────────────────────────────────────────────────
+  {
+    type: 'custom',
+    category: 'structure',
+    label: 'Custom',
+    defaultColor: '#B0BEC5',
+    defaultWidth_m: 2,
+    defaultDepth_m: 2,
+    defaultShape: 'rect',
+    description: 'Custom zone — any type the user describes (ditch, pond, shed, etc.)',
+  },
 ];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

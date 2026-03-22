@@ -11,6 +11,9 @@ import type {
   BedSystem,
   SouthEdge,
   ClimateConfig,
+  PendingAction,
+  AIAction,
+  AISuggestion,
 } from '@/types';
 
 // ---------------------------------------------------------------------------
@@ -114,6 +117,14 @@ export interface GardenStoreState {
   showMatrix: boolean;
   isLoading: boolean;
   disclosureLevel: 0 | 1 | 2 | 3 | 4;
+  canvasVisible: boolean;
+  showChatDrawer: boolean;
+  showZoneInspector: boolean;
+
+  // AI staging
+  pendingActions: PendingAction[];
+  highlightedZoneIds: string[];
+  aiSuggestions: AISuggestion[];
 
   // Undo / redo
   undoStack: UndoAction[];
@@ -124,6 +135,7 @@ export interface GardenStoreState {
   // -------------------------------------------------------------------------
   initGarden: (garden: Garden) => void;
   createNewGarden: (name: string, width_m: number, depth_m: number) => void;
+  resizeGarden: (width_m: number, depth_m: number) => void;
 
   // -------------------------------------------------------------------------
   // Zone actions
@@ -194,6 +206,21 @@ export interface GardenStoreState {
   setShowMatrix: (show: boolean) => void;
   setIsLoading: (loading: boolean) => void;
   setDisclosureLevel: (level: 0 | 1 | 2 | 3 | 4) => void;
+  setCanvasVisible: (visible: boolean) => void;
+  setShowChatDrawer: (show: boolean) => void;
+  setShowZoneInspector: (show: boolean) => void;
+
+  // -------------------------------------------------------------------------
+  // AI staging
+  // -------------------------------------------------------------------------
+  stagePendingActions: (actions: PendingAction[]) => void;
+  approveAction: (id: string) => void;
+  rejectAction: (id: string) => void;
+  approveAllPending: () => void;
+  rejectAllPending: () => void;
+  clearPending: () => void;
+  setHighlightedZones: (ids: string[]) => void;
+  setAISuggestions: (suggestions: AISuggestion[]) => void;
 
   // -------------------------------------------------------------------------
   // Persistence helpers
@@ -313,6 +340,12 @@ export const useGardenStore = create<GardenStoreState>()(
         showMatrix: false,
         isLoading: false,
         disclosureLevel: 1,
+        canvasVisible: false,
+        showChatDrawer: false,
+        showZoneInspector: false,
+        pendingActions: [],
+        highlightedZoneIds: [],
+        aiSuggestions: [],
         undoStack: [],
         redoStack: [],
 
@@ -337,6 +370,15 @@ export const useGardenStore = create<GardenStoreState>()(
             undoStack: [],
             redoStack: [],
             canvas: { ...DEFAULT_CANVAS_STATE },
+          }));
+        },
+
+        resizeGarden(width_m, depth_m) {
+          set((s) => ({
+            ...s,
+            garden: s.garden
+              ? { ...s.garden, width_m, depth_m, modified: new Date() }
+              : s.garden,
           }));
         },
 
@@ -751,6 +793,74 @@ export const useGardenStore = create<GardenStoreState>()(
           set((s) => ({ ...s, disclosureLevel: level }));
         },
 
+        setCanvasVisible(visible) {
+          set((s) => ({ ...s, canvasVisible: visible }));
+        },
+
+        setShowChatDrawer(show) {
+          set((s) => ({ ...s, showChatDrawer: show }));
+        },
+
+        setShowZoneInspector(show) {
+          set((s) => ({ ...s, showZoneInspector: show }));
+        },
+
+        // -------------------------------------------------------------------
+        // AI staging
+        // -------------------------------------------------------------------
+
+        stagePendingActions(actions) {
+          set((s) => ({ ...s, pendingActions: [...s.pendingActions, ...actions] }));
+        },
+
+        approveAction(id) {
+          set((s) => ({
+            ...s,
+            pendingActions: s.pendingActions.map((a) =>
+              a.id === id ? { ...a, status: 'approved' as const } : a,
+            ),
+          }));
+        },
+
+        rejectAction(id) {
+          set((s) => ({
+            ...s,
+            pendingActions: s.pendingActions.map((a) =>
+              a.id === id ? { ...a, status: 'rejected' as const } : a,
+            ),
+          }));
+        },
+
+        approveAllPending() {
+          set((s) => ({
+            ...s,
+            pendingActions: s.pendingActions.map((a) =>
+              a.status === 'pending' ? { ...a, status: 'approved' as const } : a,
+            ),
+          }));
+        },
+
+        rejectAllPending() {
+          set((s) => ({
+            ...s,
+            pendingActions: s.pendingActions.map((a) =>
+              a.status === 'pending' ? { ...a, status: 'rejected' as const } : a,
+            ),
+          }));
+        },
+
+        clearPending() {
+          set((s) => ({ ...s, pendingActions: [] }));
+        },
+
+        setHighlightedZones(ids) {
+          set((s) => ({ ...s, highlightedZoneIds: ids }));
+        },
+
+        setAISuggestions(suggestions) {
+          set((s) => ({ ...s, aiSuggestions: suggestions }));
+        },
+
         // -------------------------------------------------------------------
         // Persistence helpers
         // -------------------------------------------------------------------
@@ -831,6 +941,9 @@ export const useGardenStore = create<GardenStoreState>()(
         showPalette: state.showPalette,
         showTimeline: state.showTimeline,
         showMatrix: state.showMatrix,
+        canvasVisible: state.canvasVisible,
+        showChatDrawer: false,
+        showZoneInspector: false,
         canvas: {
           zoom: state.canvas.zoom,
           panX: state.canvas.panX,

@@ -12,8 +12,109 @@
  */
 
 // All type imports consolidated at the top of the file.
-import type { Crop, Zone, ClimateConfig, SeasonPlan, ShoppingListItem } from '@/types';
-import { crops } from '@/data/crops';
+import type { Crop, Zone, ClimateConfig, SeasonPlan, ShoppingListItem, BedSystem, BedSystemConfig } from '@/types';
+import { crops, cropMap } from '@/data/crops';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bed system configuration
+// ─────────────────────────────────────────────────────────────────────────────
+
+const BED_SYSTEM_CONFIGS: Record<BedSystem, BedSystemConfig> = {
+  market_30in: {
+    id: 'market_30in',
+    name: 'Market Garden (30")',
+    bedWidth_cm: 76,
+    pathWidth_cm: 30,
+    gridSnap_cm: 76,
+    description: 'Fortier / Curtis Stone — 30" beds with 12" paths',
+  },
+  biointensive_4ft: {
+    id: 'biointensive_4ft',
+    name: 'Bio-intensive (4\')',
+    bedWidth_cm: 122,
+    pathWidth_cm: 30,
+    gridSnap_cm: 122,
+    description: 'John Jeavons / SPIN farming — 4\' beds',
+  },
+  sfg_1ft: {
+    id: 'sfg_1ft',
+    name: 'Square Foot (1\')',
+    bedWidth_cm: 30,
+    pathWidth_cm: 0,
+    gridSnap_cm: 30,
+    description: 'Mel Bartholomew — 1\' grid squares',
+  },
+  metric: {
+    id: 'metric',
+    name: 'Metric (free)',
+    bedWidth_cm: 120,
+    pathWidth_cm: 40,
+    gridSnap_cm: 25,
+    description: 'European / Finnish default — 25 cm grid snap',
+  },
+  custom: {
+    id: 'custom',
+    name: 'Custom',
+    bedWidth_cm: 120,
+    pathWidth_cm: 40,
+    gridSnap_cm: 25,
+    description: 'User-defined bed and path widths',
+  },
+};
+
+/** Return the bed system configuration for the given system ID. */
+export function getBedSystemConfig(system: BedSystem): BedSystemConfig {
+  return BED_SYSTEM_CONFIGS[system] ?? BED_SYSTEM_CONFIGS.metric;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Zone companion conflict analysis (for on-canvas indicators)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ZoneCompanionLine {
+  zoneA: string;
+  zoneB: string;
+  type: 'companion' | 'antagonist';
+  cropA: string;
+  cropB: string;
+}
+
+/**
+ * Compute companion/antagonist lines between zones based on crop assignments.
+ */
+export function getZoneCompanionConflicts(
+  zones: Zone[],
+  seasons: SeasonPlan[],
+  activeSeasonId: string,
+): ZoneCompanionLine[] {
+  const season = seasons.find((s) => s.id === activeSeasonId);
+  if (!season) return [];
+
+  const lines: ZoneCompanionLine[] = [];
+  const assignments = season.crop_assignments;
+
+  for (let i = 0; i < assignments.length; i++) {
+    for (let j = i + 1; j < assignments.length; j++) {
+      const a = assignments[i];
+      const b = assignments[j];
+      for (const cropA of a.crops) {
+        const cA = cropMap[cropA.crop_id];
+        if (!cA) continue;
+        for (const cropB of b.crops) {
+          const cB = cropMap[cropB.crop_id];
+          if (!cB) continue;
+          if (cA.antagonists.includes(cB.id) || cB.antagonists.includes(cA.id)) {
+            lines.push({ zoneA: a.zone_id, zoneB: b.zone_id, type: 'antagonist', cropA: cA.id, cropB: cB.id });
+          } else if (cA.companions.includes(cB.id) || cB.companions.includes(cA.id)) {
+            lines.push({ zoneA: a.zone_id, zoneB: b.zone_id, type: 'companion', cropA: cA.id, cropB: cB.id });
+          }
+        }
+      }
+    }
+  }
+
+  return lines;
+}
 
 export interface HeatmapCell {
   /** Column index (0-based, west → east) */

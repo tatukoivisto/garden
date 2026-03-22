@@ -9,7 +9,7 @@
  *  - Graceful fallback when no API key is present
  */
 
-import type { Garden, Zone, ClimateConfig, CropAssignment } from '@/types';
+import type { Garden, Zone, ClimateConfig, CropAssignment, AIAction, AIStructuredResponse, AISuggestion, ChatMessage } from '@/types';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -23,16 +23,18 @@ export interface GardenContext {
   companions: string;
   rotation: string;
   season: string;
-}
-
-export interface AIAction {
-  type: 'add_zone' | 'move_zone' | 'assign_crops' | 'update_climate' | string;
-  payload: Record<string, unknown>;
+  selectedZones: string;
+  gardenWidth_m: string;
+  gardenDepth_m: string;
+  gardenWidth_m_num: number;
+  gardenDepth_m_num: number;
+  southEdge: string;
 }
 
 export interface AIResponse {
   text: string;
   actions: AIAction[];
+  suggestions: AISuggestion[];
 }
 
 export interface GeneratedPlan {
@@ -94,7 +96,7 @@ function getMonthName(): string {
 // Garden context builder
 // ---------------------------------------------------------------------------
 
-export function buildGardenContext(garden: Garden): GardenContext {
+export function buildGardenContext(garden: Garden, selectedZoneIds: string[] = []): GardenContext {
   // --- summary ---
   const summary = [
     `Garden: "${garden.name}"`,
@@ -176,6 +178,28 @@ export function buildGardenContext(garden: Garden): GardenContext {
   // --- current season ---
   const seasonText = `${season} (${getMonthName()}, year ${new Date().getFullYear()})`;
 
+  // --- selected zones ---
+  let selectedZonesText = 'No zones selected.';
+  if (selectedZoneIds.length > 0) {
+    const selected = garden.zones.filter((z) => selectedZoneIds.includes(z.id));
+    if (selected.length > 0) {
+      selectedZonesText = 'CURRENTLY SELECTED:\n' + selected
+        .map((z) => {
+          let detail = `"${z.name}" (${z.type}) ${z.width_m}m×${z.depth_m}m at (${z.x_m.toFixed(1)},${z.y_m.toFixed(1)})`;
+          if (z.notes) detail += ` — ${z.notes}`;
+          // Include crops for this zone
+          if (activeSeason) {
+            const assignment = activeSeason.crop_assignments.find((a) => a.zone_id === z.id);
+            if (assignment) {
+              detail += ` | Crops: ${assignment.crops.map((c) => `${c.crop_id}×${c.qty}`).join(', ')}`;
+            }
+          }
+          return `  → [${z.id.slice(0, 6)}] ${detail}`;
+        })
+        .join('\n');
+    }
+  }
+
   return {
     summary,
     zones: zonesText,
@@ -184,6 +208,12 @@ export function buildGardenContext(garden: Garden): GardenContext {
     companions: companionsText,
     rotation: rotationText,
     season: seasonText,
+    selectedZones: selectedZonesText,
+    gardenWidth_m: String(garden.width_m),
+    gardenDepth_m: String(garden.depth_m),
+    gardenWidth_m_num: garden.width_m,
+    gardenDepth_m_num: garden.depth_m,
+    southEdge: garden.south_edge,
   };
 }
 
@@ -200,6 +230,21 @@ You are a knowledgeable, warm, and practical gardening advisor with deep experti
 - Climate-adapted growing (USDA zones, soil types, frost dates)
 - Organic pest and disease management
 - Raised bed, in-ground, and container growing systems
+
+CANVAS COORDINATE SYSTEM
+========================
+The garden canvas uses a standard screen coordinate system:
+- (0, 0) is the TOP-LEFT corner of the garden.
+- x increases to the RIGHT, y increases DOWNWARD.
+- The garden boundary (the main plot area) is ${ctx.gardenWidth_m}m wide × ${ctx.gardenDepth_m}m deep. When the user says "the garden area", "the whole area", "same size", or "another area", they mean this ${ctx.gardenWidth_m}m × ${ctx.gardenDepth_m}m boundary.
+- "Top of canvas" = low y values. "Bottom of canvas" = high y values.
+- "Left" = low x values. "Right" = high x values.
+- South edge of the garden faces: ${ctx.southEdge} (this is the compass direction, NOT a coordinate — e.g. "top" means the top edge of the canvas is the south side).
+- To place a zone in the "top right": use high x, LOW y (e.g. x=${Math.max(0, ctx.gardenWidth_m_num - 4)}, y=1).
+- To place a zone in the "bottom left": use low x, HIGH y (e.g. x=1, y=${Math.max(0, ctx.gardenDepth_m_num - 4)}).
+- Zones CAN be placed outside the garden boundary (e.g. negative coordinates, or beyond ${ctx.gardenWidth_m}m/${ctx.gardenDepth_m}m). Use this for satellite areas, additional plots, or structures near the garden.
+- To add an area "next to" the garden, place it just outside the boundary (e.g. x_m=${ctx.gardenWidth_m_num + 1} for right side, y_m=${ctx.gardenDepth_m_num + 1} for below).
+- You can also resize the garden boundary itself using the resize_garden action.
 
 YOUR GARDEN STATE RIGHT NOW
 ===========================
@@ -222,60 +267,155 @@ ${ctx.rotation}
 
 Current season: ${ctx.season}
 
-RESPONSE GUIDELINES
-===================
-1. Be concise but complete. Use bullet points and bold text (**text**) for clarity.
-2. Always tailor advice to the specific garden state above — reference zone names, crop names, and climate details.
-3. When you want to make a change to the garden, embed a structured ACTION command in your response using this exact format:
-   [ACTION:action_type:{JSON_payload}]
+${ctx.selectedZones}
 
-   Available actions:
-   - Add a new zone:      [ACTION:add_zone:{"type":"raised_bed","name":"Bed A","x_m":0,"y_m":0,"width_m":1.2,"depth_m":3}]
-   - Move a zone:         [ACTION:move_zone:{"id":"zone-id","x_m":2.5,"y_m":1.0}]
-   - Assign crops:        [ACTION:assign_crops:{"zoneId":"zone-id","crops":[{"crop_id":"tomato","qty":4}]}]
-   - Update climate:      [ACTION:update_climate:{"usda_zone":"6a","last_frost":"05-01"}]
+RESPONSE FORMAT
+===============
+You MUST respond with ONLY valid JSON — no text before or after it. Match this exact schema:
+{
+  "message": "Your response text with **markdown** formatting",
+  "actions": [
+    {
+      "type": "action_type",
+      "description": "Short human-readable description of what this does",
+      "payload": { ... }
+    }
+  ],
+  "suggestions": [
+    { "label": "Short button text", "prompt": "Full follow-up prompt" }
+  ]
+}
 
-4. Only embed ACTION commands when you are confident the change is correct and the user asked for it or clearly expects it.
-5. Explain each action in plain language before or after the ACTION tag.
-6. For photo analysis, describe what you see, identify plants and issues, and suggest concrete improvements.
-7. Never make up crop or zone IDs — only reference IDs that appear in the garden state above.
-8. If the garden has no zones yet, start by suggesting a sensible layout for the space and climate.
+Valid zone types: raised_bed, in_ground_bed, strawberry_bed, three_sisters, herb_spiral, perennial_bed, propagation_bed, experimental_bed, wildflower_strip, green_manure_strip, container, greenhouse, cold_frame, polytunnel, compost_station, tool_store, seating_area, water_barrel, path, gate, fence, custom.
 
-You are helpful, encouraging, and scientifically accurate.`;
+The "custom" type can represent ANYTHING not in the list above — ditches, ponds, sheds, bee hives, dog runs, rock gardens, etc. When using "custom", always provide a descriptive "name" and appropriate "color".
+
+Available action types and their payloads:
+- add_zone: {"type":"in_ground_bed","name":"Bed A","x_m":0,"y_m":0,"width_m":1.2,"depth_m":3,"color":"#A5D6A7"}
+- remove_zone: {"id":"zone-id"}
+- move_zone: {"id":"zone-id","x_m":2.5,"y_m":1.0}
+- resize_zone: {"id":"zone-id","width_m":2,"depth_m":4}
+- rename_zone: {"id":"zone-id","name":"New Name"}
+- rotate_zone: {"id":"zone-id"}
+- assign_crops: {"zoneId":"zone-id","crops":[{"crop_id":"tomato","qty":4}]}
+- update_climate: {"usda_zone":"6a","last_frost":"05-01"}
+- resize_garden: {"width_m":20,"depth_m":40} (resizes the garden boundary area)
+
+RULES:
+1. **ACT FIRST, EXPLAIN AFTER.** When the user describes something they want, DO IT immediately with actions. Don't ask clarifying questions unless truly ambiguous. If you're 70% sure what they want, just do it — they can undo with Ctrl+Z.
+2. Be concise. Use bullet points and **bold** for clarity. Explain what you did *after* doing it.
+3. Tailor advice to the specific garden state — reference zone names and climate.
+4. Always include a "description" for each action explaining what it does.
+5. Never make up zone IDs — only use IDs from the garden state above.
+6. Always include 2-4 relevant follow-up suggestions.
+7. When the user references "it", "this", "that", or uses vague pronouns, check the CURRENTLY SELECTED zones first, then the most recently discussed zone in the conversation.
+8. For any zone type not in the standard list, use type "custom" with a descriptive name, appropriate color, and sensible dimensions.
+9. Place new zones intelligently — avoid overlaps, calculate coordinates relative to existing zones. If placing "between" two zones, average their positions. If placing "next to" a zone, offset from its edge.
+10. The "message" field supports markdown: **bold**, *italic*, bullet lists, numbered lists.`;
 }
 
 // ---------------------------------------------------------------------------
 // AI response parser
 // ---------------------------------------------------------------------------
 
-const ACTION_REGEX = /\[ACTION:([a-z_]+):(\{[\s\S]*?\})\]/g;
+/**
+ * Extract the outermost JSON object from text using brace-matching.
+ * Handles text/code fences before and after the JSON block.
+ */
+function extractJsonObject(text: string): string | null {
+  const start = text.indexOf('{');
+  if (start === -1) return null;
 
-export function parseAIResponse(rawText: string): { text: string; actions: AIAction[] } {
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) { escape = false; continue; }
+    if (ch === '\\' && inString) { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') depth++;
+    if (ch === '}') {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * Parse an AI response that may be structured JSON or freeform text.
+ * Handles both the new JSON format and legacy [ACTION:...] format for backwards compat.
+ */
+export function parseAIResponse(rawText: string): AIResponse {
+  // Try parsing as structured JSON first
+  const trimmed = rawText.trim();
+  const jsonStr = trimmed
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+
+  // Build candidates: clean response, code-fenced block, brace-matched extraction
+  const jsonCandidates = [jsonStr];
+
+  // Extract JSON from within ```json ... ``` code fences
+  const codeFenceMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (codeFenceMatch) {
+    jsonCandidates.push(codeFenceMatch[1].trim());
+  }
+
+  // Extract outermost JSON object via brace-matching (handles text before/after)
+  const braceParsed = extractJsonObject(rawText);
+  if (braceParsed) {
+    jsonCandidates.push(braceParsed);
+  }
+
+  for (const candidate of jsonCandidates) {
+    try {
+      const parsed = JSON.parse(candidate) as {
+        message?: string;
+        actions?: Array<{ type: string; description?: string; payload?: Record<string, unknown> }>;
+        suggestions?: AISuggestion[];
+      };
+      if (parsed.message !== undefined) {
+        return {
+          text: parsed.message,
+          actions: (parsed.actions ?? []).map((a) => ({
+            type: a.type,
+            description: a.description ?? a.type.replace(/_/g, ' '),
+            payload: a.payload ?? {},
+          })),
+          suggestions: parsed.suggestions ?? [],
+        };
+      }
+    } catch {
+      // Not valid JSON — try next candidate
+    }
+  }
+
+  // Legacy [ACTION:type:{payload}] format
+  const ACTION_REGEX = /\[ACTION:([a-z_]+):(\{[\s\S]*?\})\]/g;
   const actions: AIAction[] = [];
   let cleanText = rawText;
 
   let match: RegExpExecArray | null;
-  // Reset regex state
-  ACTION_REGEX.lastIndex = 0;
-
   while ((match = ACTION_REGEX.exec(rawText)) !== null) {
     const actionType = match[1];
-    const jsonStr = match[2];
+    const payloadStr = match[2];
     try {
-      const payload = JSON.parse(jsonStr) as Record<string, unknown>;
-      actions.push({ type: actionType, payload });
+      const payload = JSON.parse(payloadStr) as Record<string, unknown>;
+      actions.push({ type: actionType, description: actionType.replace(/_/g, ' '), payload });
     } catch {
-      // Malformed JSON — skip this action
-      console.warn('[GardenAI] Failed to parse action payload:', jsonStr);
+      console.warn('[GardenAI] Failed to parse action payload:', payloadStr);
     }
-    // Remove the action tag from display text
     cleanText = cleanText.replace(match[0], '').trim();
   }
 
-  // Clean up extra blank lines left by removed action tags
   cleanText = cleanText.replace(/\n{3,}/g, '\n\n').trim();
 
-  return { text: cleanText, actions };
+  return { text: cleanText, actions, suggestions: [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -313,7 +453,7 @@ async function callGeminiAPI(
       temperature: 0.7,
       topP: 0.9,
       topK: 40,
-      maxOutputTokens: 2048,
+      maxOutputTokens: 4096,
     },
     safetySettings: [
       { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
@@ -333,14 +473,182 @@ async function callGeminiAPI(
   }
 
   const data = (await response.json()) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
+    candidates?: { content?: { parts?: { text?: string; thought?: boolean }[] } }[];
   };
 
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  // Gemini 2.5 may return thinking + response as separate parts — extract only non-thought text
+  const parts = data.candidates?.[0]?.content?.parts ?? [];
+  const text = parts
+    .filter((p) => p.text && !p.thought)
+    .map((p) => p.text)
+    .join('');
   if (!text) {
     throw new Error('Gemini returned an empty response.');
   }
   return text;
+}
+
+// ---------------------------------------------------------------------------
+// Streaming Gemini API caller
+// ---------------------------------------------------------------------------
+
+export async function streamGeminiAPI(
+  model: string,
+  contents: GeminiContent[],
+  systemInstruction: string,
+  onChunk: (text: string) => void,
+): Promise<string> {
+  const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('GEMINI_API_KEY_MISSING');
+  }
+
+  const url = `${GEMINI_API_BASE}/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
+
+  const body = {
+    systemInstruction: { parts: [{ text: systemInstruction }] },
+    contents,
+    generationConfig: {
+      temperature: 0.7,
+      topP: 0.9,
+      topK: 40,
+      maxOutputTokens: 4096,
+    },
+    safetySettings: [
+      { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
+      { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
+    ],
+  };
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gemini API error ${response.status}: ${errorText}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('No response body');
+
+  const decoder = new TextDecoder();
+  let fullText = '';
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    // Parse SSE events
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6).trim();
+      if (data === '[DONE]') continue;
+
+      try {
+        const parsed = JSON.parse(data);
+        // Gemini 2.5 may return thinking parts — skip those
+        const parts = parsed.candidates?.[0]?.content?.parts ?? [];
+        for (const part of parts) {
+          if (part.text && !part.thought) {
+            fullText += part.text;
+            onChunk(part.text);
+          }
+        }
+      } catch {
+        // skip malformed SSE lines
+      }
+    }
+  }
+
+  return fullText;
+}
+
+// ---------------------------------------------------------------------------
+// Conversation history → Gemini contents
+// ---------------------------------------------------------------------------
+
+const MAX_HISTORY_MESSAGES = 20;
+
+/**
+ * Convert chat history + current message into Gemini's multi-turn contents array.
+ * Merges consecutive same-role messages (Gemini requires alternating roles).
+ */
+function buildContents(chatHistory: ChatMessage[], currentMessage: string): GeminiContent[] {
+  const raw: GeminiContent[] = [];
+
+  const recent = chatHistory.slice(-MAX_HISTORY_MESSAGES);
+  for (const msg of recent) {
+    raw.push({
+      role: msg.role === 'user' ? 'user' : 'model',
+      parts: [{ text: msg.content }],
+    });
+  }
+
+  // Add the current user message
+  raw.push({ role: 'user', parts: [{ text: currentMessage }] });
+
+  // Merge consecutive same-role messages (Gemini requirement)
+  const merged: GeminiContent[] = [];
+  for (const content of raw) {
+    if (merged.length > 0 && merged[merged.length - 1].role === content.role) {
+      merged[merged.length - 1].parts[0].text += '\n' + content.parts[0].text!;
+    } else {
+      merged.push(content);
+    }
+  }
+
+  // Ensure the first message is from 'user' (Gemini requirement)
+  if (merged.length > 0 && merged[0].role !== 'user') {
+    merged.shift();
+  }
+
+  return merged;
+}
+
+/**
+ * Stream a chat message with callbacks for text chunks and completed actions.
+ */
+export async function streamChatMessage(
+  message: string,
+  gardenContext: GardenContext,
+  onTextChunk: (text: string) => void,
+  onComplete: (response: AIResponse) => void,
+  chatHistory?: ChatMessage[],
+): Promise<AIResponse> {
+  const systemPrompt = buildSystemPrompt(gardenContext);
+  let fullText = '';
+
+  try {
+    fullText = await streamGeminiAPI(
+      'gemini-2.5-flash',
+      buildContents(chatHistory ?? [], message),
+      systemPrompt,
+      onTextChunk,
+    );
+  } catch (err) {
+    const isNoKey = err instanceof Error && err.message === 'GEMINI_API_KEY_MISSING';
+    if (isNoKey) {
+      const fallback = buildFallbackResponse(message, gardenContext);
+      onTextChunk(fallback);
+      const response: AIResponse = { text: fallback, actions: [], suggestions: [] };
+      onComplete(response);
+      return response;
+    }
+    throw err;
+  }
+
+  const response = parseAIResponse(fullText);
+  onComplete(response);
+  return response;
 }
 
 // ---------------------------------------------------------------------------
@@ -426,21 +734,22 @@ function buildFallbackResponse(message: string, ctx: GardenContext): string {
 export async function sendChatMessage(
   message: string,
   gardenContext: GardenContext,
+  chatHistory?: ChatMessage[],
 ): Promise<AIResponse> {
   const systemPrompt = buildSystemPrompt(gardenContext);
 
   let rawText: string;
   try {
     rawText = await callGeminiAPI(
-      'gemini-1.5-flash',
-      [{ role: 'user', parts: [{ text: message }] }],
+      'gemini-2.5-flash',
+      buildContents(chatHistory ?? [], message),
       systemPrompt,
     );
   } catch (err) {
     const isNoKey = err instanceof Error && err.message === 'GEMINI_API_KEY_MISSING';
     if (isNoKey) {
       const fallback = buildFallbackResponse(message, gardenContext);
-      return { text: fallback, actions: [] };
+      return { text: fallback, actions: [], suggestions: [] };
     }
     throw err;
   }
@@ -474,7 +783,7 @@ The user has submitted a garden photo. Your task:
   let rawText: string;
   try {
     rawText = await callGeminiAPI(
-      'gemini-1.5-flash',
+      'gemini-2.5-flash',
       [
         {
           role: 'user',
@@ -501,6 +810,7 @@ The user has submitted a garden photo. Your task:
           '**Photo Analysis — Offline Mode**\n\nPhoto analysis requires a Gemini API key. ' +
           'Add NEXT_PUBLIC_GEMINI_API_KEY to your environment to enable vision features.',
         actions: [],
+        suggestions: [],
       };
     }
     throw err;
@@ -559,7 +869,7 @@ Consider the current season (${season}) and climate zone (${climate.usda_zone}) 
   let rawText: string;
   try {
     rawText = await callGeminiAPI(
-      'gemini-1.5-flash',
+      'gemini-2.5-flash',
       [{ role: 'user', parts: [{ text: description }] }],
       systemPrompt,
     );
