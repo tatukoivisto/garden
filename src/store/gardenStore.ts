@@ -267,9 +267,11 @@ export const useGardenStore = create<GardenStoreState>()(
         return zones.map((z) => (z.id === updated.id ? updated : z));
       }
 
-      /** Find a zone by id; returns undefined when not found. */
+      /** Find a zone by id (supports prefix matching for truncated AI IDs). */
       function findZone(id: string): Zone | undefined {
-        return get().garden?.zones.find((z) => z.id === id);
+        const zones = get().garden?.zones;
+        if (!zones) return undefined;
+        return zones.find((z) => z.id === id) ?? zones.find((z) => z.id.startsWith(id));
       }
 
       /** Resolve current garden; throws when no garden is loaded. */
