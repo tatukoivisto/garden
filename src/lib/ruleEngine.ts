@@ -2,16 +2,18 @@
  * Rule engine utilities for the Kitchen Garden Planner.
  *
  * This file contains:
- *  1. generateSunHeatmap — solar-model heatmap for the canvas overlay
- *  2. recommendCropsForZone — agronomic crop recommendation engine
- *  3. Companion planting helpers (getCompanionIds, areAntagonists, calcPlantQty)
- *
- * generateSunHeatmap computes estimated daily sun-hours for every cell in a
- * grid overlaid on the garden plot. The model is intentionally simplified:
- * it uses the observer's latitude, the solar declination for the given day of
- * year, and a clear-sky approximation to produce a plausible heatmap without
- * a full ray-cast simulation.
+ *  1. generateSunHeatmap     — solar-model heatmap for the canvas overlay
+ *  2. getSowingWindow        — sowing/harvest date calculator from climate config
+ *  3. checkCompanionship     — bidirectional companion/antagonist lookup
+ *  4. getFamilyColor         — family colour palette helper
+ *  5. recommendCropsForZone  — agronomic crop recommendation engine
+ *  6. Companion helpers      — getCompanionIds, areAntagonists, calcPlantQty
+ *  7. generateShoppingList   — shopping list from season plan
  */
+
+// All type imports consolidated at the top of the file.
+import type { Crop, Zone, ClimateConfig, SeasonPlan, ShoppingListItem } from '@/types';
+import { crops } from '@/data/crops';
 
 export interface HeatmapCell {
   /** Column index (0-based, west → east) */
@@ -125,12 +127,177 @@ export function generateSunHeatmap(options: SunHeatmapOptions): HeatmapCell[] {
   return cells;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Sowing-window helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SowingWindow {
+  /** Start of indoor sowing (null if the crop is not sown indoors). */
+  indoorStart: Date | null;
+  /** End of the recommended indoor sowing window. */
+  indoorEnd: Date | null;
+  /** Date to move transplants outside, or direct-sow date. */
+  outdoorStart: Date;
+  /** First expected harvest date. */
+  harvestStart: Date;
+  /** Last date of the harvest window. */
+  harvestEnd: Date;
+  /**
+   * Approximate end of storage period (4 weeks after harvest end).
+   * null for crops that are not normally stored.
+   */
+  storageEnd: Date | null;
+}
+
+/** Parse a "MM-DD" climate frost-date string into a full Date for `year`. */
+function parseFrostDate(mmdd: string, year: number): Date {
+  const [mm, dd] = mmdd.split('-').map(Number);
+  return new Date(year, mm - 1, dd);
+}
+
+/** Return a new Date that is `weeks` weeks after (or before, if negative) `date`. */
+function addWeeks(date: Date, weeks: number): Date {
+  const d = new Date(date);
+  d.setDate(d.getDate() + Math.round(weeks * 7));
+  return d;
+}
+
+/** Return a new Date that is `days` days after `date`. */
+function addDays(date: Date, days: number): Date {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+/**
+ * Calculate sowing, transplanting, harvest, and storage windows for a crop
+ * given the garden's climate configuration and a target calendar year.
+ *
+ * Algorithm:
+ *  1. Indoor sowing start = last_frost − sow_indoor_weeks_before_last_frost
+ *     (indoor window spans 2 weeks)
+ *  2. Outdoor date = last_frost + transplant_weeks_after_last_frost
+ *     (negative weeks = the crop tolerates frost and goes out early)
+ *  3. Harvest start = outdoor date + avg(days_to_harvest[0], days_to_harvest[1])
+ *  4. Harvest end   = harvest start + harvest_window_weeks
+ *  5. Storage end   = harvest end + 4 weeks  (root / bulb crops only)
+ */
+export function getSowingWindow(
+  crop: Crop,
+  climate: ClimateConfig,
+  year: number = new Date().getFullYear(),
+): SowingWindow {
+  const lastFrost = parseFrostDate(climate.last_frost, year);
+
+  let indoorStart: Date | null = null;
+  let indoorEnd: Date | null = null;
+  if (crop.sow_indoor_weeks_before_last_frost > 0) {
+    indoorStart = addWeeks(lastFrost, -crop.sow_indoor_weeks_before_last_frost);
+    indoorEnd = addWeeks(indoorStart, 2);
+  }
+
+  const outdoorStart = addWeeks(lastFrost, crop.transplant_weeks_after_last_frost);
+
+  const avgDays = (crop.days_to_harvest[0] + crop.days_to_harvest[1]) / 2;
+  const harvestStart = addDays(outdoorStart, avgDays);
+  const harvestEnd = addWeeks(harvestStart, crop.harvest_window_weeks);
+
+  // Storage applies to root / bulb crops and a few others
+  const storageGroups = ['root_veg', 'allium_family', 'solanaceae', 'umbelliferae'];
+  const hasStorage =
+    storageGroups.includes(crop.rotation_group) ||
+    ['potato', 'garlic', 'onion', 'beet', 'carrot'].includes(crop.id);
+  const storageEnd = hasStorage ? addWeeks(harvestEnd, 4) : null;
+
+  return { indoorStart, indoorEnd, outdoorStart, harvestStart, harvestEnd, storageEnd };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Companion-planting helper
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type CompanionRelationship = 'companion' | 'antagonist' | 'neutral';
+
+export interface CompanionResult {
+  relationship: CompanionRelationship;
+  /** Short human-readable explanation of the relationship. */
+  reason: string;
+}
+
+/**
+ * Determine the companion-planting relationship between two crops.
+ *
+ * The lookup is bidirectional: if A lists B as a companion OR B lists A as a
+ * companion the result is 'companion'. Antagonism takes priority over
+ * companionship when present in either direction.
+ */
+export function checkCompanionship(cropA: Crop, cropB: Crop): CompanionResult {
+  if (cropA.id === cropB.id) {
+    return { relationship: 'neutral', reason: 'Same crop.' };
+  }
+
+  const aDislikesB = cropA.antagonists.includes(cropB.id);
+  const bDislikesA = cropB.antagonists.includes(cropA.id);
+  const aLikesB = cropA.companions.includes(cropB.id);
+  const bLikesA = cropB.companions.includes(cropA.id);
+
+  if (aDislikesB || bDislikesA) {
+    const who = aDislikesB ? cropA.name_en : cropB.name_en;
+    const other = aDislikesB ? cropB.name_en : cropA.name_en;
+    return {
+      relationship: 'antagonist',
+      reason: `${who} inhibits or competes with ${other}.`,
+    };
+  }
+
+  if (aLikesB || bLikesA) {
+    const who = aLikesB ? cropA.name_en : cropB.name_en;
+    const other = aLikesB ? cropB.name_en : cropA.name_en;
+    return {
+      relationship: 'companion',
+      reason: `${who} benefits from growing near ${other}.`,
+    };
+  }
+
+  return {
+    relationship: 'neutral',
+    reason: `No known strong interaction between ${cropA.name_en} and ${cropB.name_en}.`,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Family colour palette
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Display colour for each plant family used in timeline bars and matrix cells.
+ * Keys are lower-cased family names as stored in the crop database.
+ */
+export const FAMILY_COLORS: Record<string, string> = {
+  solanaceae:      '#EF5350',
+  brassicaceae:    '#66BB6A',
+  fabaceae:        '#FDD835',
+  apiaceae:        '#AB47BC',
+  amaryllidaceae:  '#EC407A',
+  cucurbitaceae:   '#FF7043',
+  asteraceae:      '#29B6F6',
+  chenopodiaceae:  '#EF9A9A',
+  lamiaceae:       '#A5D6A7',
+  rosaceae:        '#F48FB1',
+  poaceae:         '#DCE775',
+  polygonaceae:    '#FFCC80',
+  boraginaceae:    '#80DEEA',
+  hydrophyllaceae: '#CE93D8',
+};
+
+/** Return the display colour for a crop family (case-insensitive lookup). */
+export function getFamilyColor(family: string): string {
+  return FAMILY_COLORS[family.toLowerCase()] ?? '#90A4AE';
+}
+
 // ============================================================================
 // Crop recommendation engine
 // ============================================================================
-
-import type { Crop, Zone, ClimateConfig } from '@/types';
-import { crops } from '@/data/crops';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -310,8 +477,6 @@ export function areAntagonists(cropIdA: string, cropIdB: string): boolean {
 // ============================================================================
 // Shopping list generator
 // ============================================================================
-
-import type { SeasonPlan, ShoppingListItem } from '@/types';
 
 /**
  * Generate a categorised shopping list from a set of zones and their crop
