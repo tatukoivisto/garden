@@ -1,0 +1,114 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Smooth scrolling ────────────────────────────────────────────── */
+html {
+  scroll-behavior: smooth;
+}
+
+/* ── Custom scrollbar (dark, garden-themed) ──────────────────────── */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #2F5E3A;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #6BAF7A;
+  border-radius: 4px;
+  border: 2px solid #2F5E3A;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #A8C66C;
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #6BAF7A #2F5E3A;
+}
+
+/* ── CSS custom properties (garden palette) ──────────────────────── */
+:root {
+  --color-soil:        #5C3D2E;
+  --color-soil-light:  #7A5240;
+  --color-leaf:        #4A7C59;
+  --color-leaf-light:  #6BAF7A;
+  --color-leaf-dark:   #2F5E3A;
+  --color-sprout:      #A8C66C;
+  --color-sun:         #F4B942;
+  --color-bark:        #8B5E3C;
+  --color-stone:       #9E9E8E;
+  --color-cream:       #F5F0E8;
+  --color-cream-dark:  #EDE4D0;
+  --color-sky:         #87CEEB;
+
+  --foreground: var(--color-soil);
+  --background: var(--color-cream);
+}
+
+/* ── Base element styles ─────────────────────────────────────────── */
+@layer base {
+  body {
+    @apply bg-garden-cream text-garden-soil antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-semibold tracking-tight;
+  }
+
+  a {
+    @apply text-garden-leaf transition-colors duration-200;
+  }
+
+  a:hover {
+    @apply text-garden-leaf-dark;
+  }
+
+  ::selection {
+    background-color: #A8C66C;
+    color: #2F5E3A;
+  }
+}
+
+/* ── Utility / component layer ───────────────────────────────────── */
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2
+           rounded-lg bg-garden-leaf px-4 py-2 text-sm font-medium text-white
+           shadow-sm transition-all duration-200
+           hover:bg-garden-leaf-dark hover:shadow-md
+           focus-visible:outline-none focus-visible:ring-2
+           focus-visible:ring-garden-leaf focus-visible:ring-offset-2
+           disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2
+           rounded-lg border border-garden-leaf bg-transparent px-4 py-2
+           text-sm font-medium text-garden-leaf shadow-sm
+           transition-all duration-200
+           hover:bg-garden-leaf hover:text-white
+           focus-visible:outline-none focus-visible:ring-2
+           focus-visible:ring-garden-leaf focus-visible:ring-offset-2
+           disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .card {
+    @apply rounded-xl border border-garden-cream-dark bg-white/70
+           shadow-sm backdrop-blur-sm
+           transition-shadow duration-200
+           hover:shadow-md;
+  }
+
+  .garden-panel {
+    @apply rounded-2xl bg-garden-leaf-dark/90 p-6 text-white shadow-lg;
+  }
+}
