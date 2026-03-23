@@ -131,7 +131,9 @@ export default function AICommandBar() {
   const [error, setError] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(VISIBLE_MESSAGES);
   const [pendingImage, setPendingImage] = useState<string | null>(null);
+  const [pendingMediaName, setPendingMediaName] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -194,32 +196,123 @@ export default function AICommandBar() {
   }, []);
 
   // ---------------------------------------------------------------------------
-  // Photo handling
+  // Media handling (images + videos via drag-and-drop or file picker)
   // ---------------------------------------------------------------------------
 
-  const handlePhotoSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  /** Read an image file as base64 data URL. */
+  const readImageFile = useCallback((file: File) => {
     const reader = new FileReader();
     reader.onload = () => {
-      const base64 = reader.result as string;
-      setPendingImage(base64);
+      setPendingImage(reader.result as string);
+      setPendingMediaName(file.name);
       inputRef.current?.focus();
-      // Pre-fill prompt if input is empty
       if (!inputRef.current?.value) {
         setInputValue('Analyze this garden photo');
       }
     };
     reader.readAsDataURL(file);
-
-    // Reset file input so same file can be re-selected
-    e.target.value = '';
   }, []);
+
+  /** Extract the first frame from a video as a JPEG base64. */
+  const extractVideoFrame = useCallback((file: File) => {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+
+    video.onloadeddata = () => {
+      // Seek to 1 second (or 0 if shorter)
+      video.currentTime = Math.min(1, video.duration * 0.1);
+    };
+
+    video.onseeked = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.min(video.videoWidth, 1280);
+      canvas.height = Math.round(canvas.width * (video.videoHeight / video.videoWidth));
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const base64 = canvas.toDataURL('image/jpeg', 0.85);
+        setPendingImage(base64);
+        setPendingMediaName(file.name);
+        inputRef.current?.focus();
+        if (!inputRef.current?.value) {
+          setInputValue('Analyze this garden video frame');
+        }
+      }
+      URL.revokeObjectURL(url);
+      video.remove();
+    };
+
+    video.onerror = () => {
+      URL.revokeObjectURL(url);
+      video.remove();
+    };
+
+    video.src = url;
+  }, []);
+
+  /** Process a dropped or selected file. */
+  const handleMediaFile = useCallback((file: File) => {
+    if (file.type.startsWith('image/')) {
+      readImageFile(file);
+    } else if (file.type.startsWith('video/')) {
+      extractVideoFrame(file);
+    }
+  }, [readImageFile, extractVideoFrame]);
+
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) handleMediaFile(file);
+    e.target.value = '';
+  }, [handleMediaFile]);
 
   const clearPendingImage = useCallback(() => {
     setPendingImage(null);
+    setPendingMediaName(null);
   }, []);
+
+  // ---------------------------------------------------------------------------
+  // Drag and drop
+  // ---------------------------------------------------------------------------
+
+  const dragCounterRef = useRef(0);
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current++;
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsDragging(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current--;
+    if (dragCounterRef.current === 0) {
+      setIsDragging(false);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    dragCounterRef.current = 0;
+
+    const file = e.dataTransfer.files?.[0];
+    if (file && (file.type.startsWith('image/') || file.type.startsWith('video/'))) {
+      handleMediaFile(file);
+    }
+  }, [handleMediaFile]);
 
   // ---------------------------------------------------------------------------
   // Voice handling (Web Speech API)
@@ -436,15 +529,38 @@ export default function AICommandBar() {
   }, [hasOlderMessages]);
 
   return (
-    <div ref={containerRef} className="fixed bottom-0 left-0 right-0 z-40 flex flex-col items-center pointer-events-none pb-4 px-4">
-      {/* Hidden file input for photos */}
+    <div
+      ref={containerRef}
+      className="fixed bottom-0 left-0 right-0 z-40 flex flex-col items-center pointer-events-none pb-4 px-4"
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {/* Drop zone overlay */}
+      {isDragging && (
+        <div className="pointer-events-auto fixed inset-0 z-50 flex items-end justify-center pb-20">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+          <div className="relative w-full max-w-2xl mx-4 rounded-2xl border-2 border-dashed border-emerald-400/40 bg-emerald-500/[0.06] px-8 py-12 text-center">
+            <svg className="mx-auto mb-3 h-8 w-8 text-emerald-400/50" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <circle cx="8.5" cy="8.5" r="1.5" />
+              <path d="M21 15l-5-5L5 21" />
+            </svg>
+            <p className="text-sm font-medium text-emerald-400/60">Drop image or video</p>
+            <p className="mt-1 text-[11px] text-white/25">Photos are analyzed directly. Videos extract a frame for analysis.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden file input */}
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,video/*"
         capture="environment"
         className="hidden"
-        onChange={handlePhotoSelect}
+        onChange={handleFileSelect}
       />
 
       {/* Chat panel — scrollable history + current response */}
@@ -554,7 +670,7 @@ export default function AICommandBar() {
         <div className="pointer-events-auto w-full max-w-2xl mb-2">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/[0.04] border border-white/[0.08]">
             <img src={pendingImage} alt="Attached" className="h-8 w-8 rounded object-cover" />
-            <span className="text-[10px] text-white/40">Photo attached</span>
+            <span className="text-[10px] text-white/40">{pendingMediaName ?? 'Photo attached'}</span>
             <button
               onClick={clearPendingImage}
               className="p-0.5 rounded text-white/20 hover:text-white/50 transition-colors"
@@ -608,7 +724,7 @@ export default function AICommandBar() {
             <button
               onClick={() => fileInputRef.current?.click()}
               className="p-1.5 rounded-lg text-white/15 hover:text-white/40 hover:bg-white/[0.04] transition-colors duration-100"
-              title="Attach photo"
+              title="Attach image or video"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="3" y="3" width="18" height="18" rx="2" />
