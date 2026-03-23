@@ -311,7 +311,12 @@ RULES:
 7. When the user references "it", "this", "that", or uses vague pronouns, check the CURRENTLY SELECTED zones first, then the most recently discussed zone in the conversation.
 8. For any zone type not in the standard list, use type "custom" with a descriptive name, appropriate color, and sensible dimensions.
 9. Place new zones intelligently — avoid overlaps, calculate coordinates relative to existing zones. If placing "between" two zones, average their positions. If placing "next to" a zone, offset from its edge.
-10. The "message" field supports markdown: **bold**, *italic*, bullet lists, numbered lists.`;
+10. The "message" field supports markdown: **bold**, *italic*, bullet lists, numbered lists.
+
+CRITICAL — ACTION INTEGRITY:
+11. **NEVER describe an action in your message that is not in the actions array.** If your message says "I've added a ditch" or "I moved the bed", the corresponding add_zone/move_zone action MUST exist in the actions array. Describing an action without including it is the worst possible failure — the user sees your claim but nothing happens.
+12. **Self-check before responding:** Review your JSON output. For every verb in your message that implies a change (added, placed, moved, removed, resized, renamed, assigned), verify there is a matching entry in the actions array. If not, either add the action or rewrite the message to not claim you did it.
+13. **If you cannot determine the right action parameters, say so** — never pretend you performed an action. "I'm not sure where to place it — could you clarify?" is far better than a phantom action claim.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -424,12 +429,17 @@ export function parseAIResponse(rawText: string): AIResponse {
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
-interface GeminiPart {
+export interface GeminiPart {
   text?: string;
   inlineData?: { mimeType: string; data: string };
+  functionCall?: { name: string; args: Record<string, unknown> };
+  functionResponse?: { name: string; response: Record<string, unknown> };
+  /** Gemini 3 thought signature — must be preserved and passed back verbatim. */
+  thoughtSignature?: string;
+  thought?: boolean;
 }
 
-interface GeminiContent {
+export interface GeminiContent {
   role: 'user' | 'model';
   parts: GeminiPart[];
 }
@@ -454,6 +464,7 @@ async function callGeminiAPI(
       topP: 0.9,
       topK: 40,
       maxOutputTokens: 4096,
+      responseMimeType: 'application/json',
     },
     safetySettings: [
       { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
@@ -513,6 +524,7 @@ export async function streamGeminiAPI(
       topP: 0.9,
       topK: 40,
       maxOutputTokens: 4096,
+      responseMimeType: 'application/json',
     },
     safetySettings: [
       { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
@@ -576,13 +588,13 @@ export async function streamGeminiAPI(
 // Conversation history → Gemini contents
 // ---------------------------------------------------------------------------
 
-const MAX_HISTORY_MESSAGES = 20;
+export const MAX_HISTORY_MESSAGES = 20;
 
 /**
  * Convert chat history + current message into Gemini's multi-turn contents array.
  * Merges consecutive same-role messages (Gemini requires alternating roles).
  */
-function buildContents(chatHistory: ChatMessage[], currentMessage: string): GeminiContent[] {
+export function buildContents(chatHistory: ChatMessage[], currentMessage: string): GeminiContent[] {
   const raw: GeminiContent[] = [];
 
   const recent = chatHistory.slice(-MAX_HISTORY_MESSAGES);
@@ -629,7 +641,7 @@ export async function streamChatMessage(
 
   try {
     fullText = await streamGeminiAPI(
-      'gemini-2.5-flash',
+      'gemini-3-flash-preview',
       buildContents(chatHistory ?? [], message),
       systemPrompt,
       onTextChunk,
@@ -741,7 +753,7 @@ export async function sendChatMessage(
   let rawText: string;
   try {
     rawText = await callGeminiAPI(
-      'gemini-2.5-flash',
+      'gemini-3-flash-preview',
       buildContents(chatHistory ?? [], message),
       systemPrompt,
     );
@@ -783,7 +795,7 @@ The user has submitted a garden photo. Your task:
   let rawText: string;
   try {
     rawText = await callGeminiAPI(
-      'gemini-2.5-flash',
+      'gemini-3-flash-preview',
       [
         {
           role: 'user',
@@ -869,7 +881,7 @@ Consider the current season (${season}) and climate zone (${climate.usda_zone}) 
   let rawText: string;
   try {
     rawText = await callGeminiAPI(
-      'gemini-2.5-flash',
+      'gemini-3-flash-preview',
       [{ role: 'user', parts: [{ text: description }] }],
       systemPrompt,
     );
@@ -895,6 +907,135 @@ Consider the current season (${season}) and climate zone (${climate.usda_zone}) 
     console.error('[GardenAI] Failed to parse generated plan JSON:', jsonStr);
     return buildDefaultPlan(climate);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Default plan (fallback for generateGardenPlan without API key)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Tool-use Gemini API caller
+// ---------------------------------------------------------------------------
+
+export interface GeminiToolResponse {
+  text: string | null;
+  functionCalls: Array<{ name: string; args: Record<string, unknown> }> | null;
+  /** Raw parts from the API response — must be passed back verbatim to preserve thoughtSignature. */
+  rawModelParts: GeminiPart[];
+}
+
+export async function callGeminiWithTools(
+  model: string,
+  contents: GeminiContent[],
+  systemInstruction: string,
+  toolDeclarations: object[],
+  signal?: AbortSignal,
+): Promise<GeminiToolResponse> {
+  const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('GEMINI_API_KEY_MISSING');
+  }
+
+  const url = `${GEMINI_API_BASE}/${model}:generateContent?key=${apiKey}`;
+
+  const body = {
+    systemInstruction: { parts: [{ text: systemInstruction }] },
+    contents,
+    tools: toolDeclarations,
+    generationConfig: {
+      temperature: 0.7,
+      topP: 0.9,
+      topK: 40,
+      maxOutputTokens: 4096,
+      // Note: no responseMimeType — tool-use needs free-form text for final response
+    },
+    safetySettings: [
+      { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
+      { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
+    ],
+  };
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gemini API error ${response.status}: ${errorText}`);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const data = (await response.json()) as any;
+
+  // Preserve raw parts exactly as returned — includes thoughtSignature fields
+  // that Gemini 3 requires to be passed back in subsequent turns.
+  const rawParts: GeminiPart[] = data.candidates?.[0]?.content?.parts ?? [];
+
+  // Check for function calls
+  const functionCalls = rawParts
+    .filter((p: GeminiPart) => p.functionCall)
+    .map((p: GeminiPart) => ({
+      name: p.functionCall!.name,
+      args: p.functionCall!.args ?? {},
+    }));
+
+  if (functionCalls.length > 0) {
+    return { text: null, functionCalls, rawModelParts: rawParts };
+  }
+
+  // Extract text (skip thinking parts)
+  const text = rawParts
+    .filter((p: GeminiPart) => p.text && !(p as any).thought)
+    .map((p: GeminiPart) => p.text)
+    .join('');
+
+  return { text: text || '', functionCalls: null, rawModelParts: rawParts };
+}
+
+// ---------------------------------------------------------------------------
+// Tool-use system prompt (simplified — tools handle spatial logic)
+// ---------------------------------------------------------------------------
+
+export function buildToolSystemPrompt(ctx: GardenContext): string {
+  return `You are GardenAI — an expert gardening advisor embedded in the Kitchen Garden Planner.
+
+You have tools to query and modify the garden. Use them to fulfill user requests.
+
+EXPERTISE: Companion planting, crop rotation, seasonal scheduling, climate-adapted growing, organic pest management, raised bed and in-ground systems.
+
+WORKFLOW:
+1. Call get_garden_state first if you need to understand the current layout.
+2. For placement, use semantic locations ("top-left", "next-to") — the tools handle coordinate math. You do NOT need to calculate coordinates yourself.
+3. Use calculate_bed_size to determine dimensions from plant counts and spacing.
+4. After making changes, briefly explain what you did and why.
+5. Be proactive: if the user says "add a tomato bed", calculate the right size, find a spot, and place it.
+
+GARDEN AREAS & CANVAS:
+- The main garden canvas is ${ctx.gardenWidth_m}m × ${ctx.gardenDepth_m}m. This is the primary plot area.
+- You can place zones OUTSIDE the garden boundary using location "outside-right", "outside-below", "outside-left", or "outside-above". Use this for separate garden areas like orchards, forest gardens, meadows, etc.
+- You can EXPAND the garden canvas using resize_garden to make the main area larger.
+- When the user asks to "add a new area" or "create another garden section" — use place_zone with an outside-* location and custom type, or resize_garden to expand.
+- South edge faces: ${ctx.southEdge}.
+
+CURRENT CONTEXT:
+- ${ctx.summary}
+- Season: ${ctx.season}
+
+${ctx.selectedZones !== 'No zones selected.' ? ctx.selectedZones : ''}
+
+RULES:
+1. ACT FIRST using tools, explain after. Don't ask unless truly ambiguous.
+2. Be concise. Use **bold** and bullet points.
+3. When the user says "it", "this", "that" — use find_zone to resolve the reference.
+4. Always include 2-4 relevant follow-up suggestions in your final response.
+5. Batch multiple tool calls in a single turn when possible for efficiency.
+6. Your final text response should use markdown and include a "suggestions" section formatted as:
+   SUGGESTIONS:
+   - [button text]: follow-up prompt
+   - [button text]: follow-up prompt`;
 }
 
 // ---------------------------------------------------------------------------

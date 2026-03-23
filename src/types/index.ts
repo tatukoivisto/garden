@@ -325,7 +325,7 @@ export interface GardenTemplate {
 
 // AI action (from AI response)
 export interface AIAction {
-  type: 'add_zone' | 'move_zone' | 'remove_zone' | 'resize_zone' | 'rename_zone' | 'rotate_zone' | 'assign_crops' | 'update_climate' | string;
+  type: 'add_zone' | 'move_zone' | 'remove_zone' | 'resize_zone' | 'rename_zone' | 'rotate_zone' | 'assign_crops' | 'update_climate' | 'resize_garden' | string;
   description: string;
   payload: Record<string, unknown>;
 }
